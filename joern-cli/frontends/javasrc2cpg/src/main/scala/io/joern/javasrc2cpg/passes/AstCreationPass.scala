@@ -31,6 +31,7 @@ import org.slf4j.LoggerFactory
 import java.net.URLClassLoader
 import java.nio.file.{Path, Paths}
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import scala.collection.parallel.CollectionConverters.*
 import scala.collection.concurrent
 import scala.jdk.CollectionConverters.*
@@ -46,6 +47,8 @@ class AstCreationPass(config: Config, cpg: Cpg, sourcesOverride: Option[List[Str
 
   val (sourceParser, symbolSolver) = initParserAndUtils(config)
 
+  var stackOverflows: AtomicInteger = new AtomicInteger(0)
+
   override def generateParts(): Array[String] = sourceParser.relativeFilenames.toArray
 
   override def runOnPart(diffGraph: DiffGraphBuilder, filename: String): Unit = {
@@ -53,19 +56,17 @@ class AstCreationPass(config: Config, cpg: Cpg, sourcesOverride: Option[List[Str
       case Some(compilationUnit, fileContent) =>
         symbolSolver.inject(compilationUnit)
         val contentToUse = if (!config.disableFileContent) fileContent else None
-
-        diffGraph.absorb(
-          new AstCreator(
-            filename,
-            compilationUnit,
-            contentToUse,
-            global,
-            symbolSolver,
-            config.keepTypeArguments,
-            loggedExceptionCounts
-          )(config.schemaValidation)
-            .createAst()
-        )
+        val astCreator = new AstCreator(
+          filename,
+          compilationUnit,
+          contentToUse,
+          global,
+          symbolSolver,
+          config.keepTypeArguments,
+          loggedExceptionCounts
+        )(config.schemaValidation)
+        stackOverflows.getAndAdd(astCreator.stackOverflows)
+        diffGraph.absorb(astCreator.createAst())
 
       case None => logger.warn(s"Skipping AST creation for $filename")
     }

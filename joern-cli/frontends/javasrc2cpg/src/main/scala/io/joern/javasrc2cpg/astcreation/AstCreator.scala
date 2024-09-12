@@ -244,6 +244,7 @@ class AstCreator(
     }
   }
 
+  var stackOverflows: Int = 0
   private[astcreation] def tryWithSafeStackOverflow[T](expr: => T): Try[T] = {
     try {
 
@@ -263,7 +264,7 @@ class AstCreator(
           }
 
           if (loggedCount.exists(_ <= 3)) {
-            logger.debug("tryWithFailureLogging encountered exception", failure.exception)
+            // logger.debug("tryWithFailureLogging encountered exception", failure.exception)
           }
 
           failure
@@ -273,6 +274,7 @@ class AstCreator(
       // unterminated recursion in some cases where types cannot be resolved.
       case e: StackOverflowError =>
         logger.debug(s"Caught StackOverflowError in $filename")
+        stackOverflows += 1
         Failure(e)
     }
   }

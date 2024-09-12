@@ -24,6 +24,7 @@ class JavaSrc2Cpg extends X2CpgFrontend[Config] {
       astCreationPass.createAndApply()
       astCreationPass.sourceParser.cleanupDelombokOutput()
       astCreationPass.clearJavaParserCaches()
+      logger.error(s"Found stack overflows: ${astCreationPass.stackOverflows.get()}")
       JavaConfigFileCreationPass(cpg).createAndApply()
       if (!config.skipTypeInfPass) {
         TypeNodePass.withRegisteredTypes(astCreationPass.global.usedTypes.keys().asScala.toList, cpg).createAndApply()
