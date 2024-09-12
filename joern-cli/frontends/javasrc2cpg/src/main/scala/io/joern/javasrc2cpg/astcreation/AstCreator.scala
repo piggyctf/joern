@@ -17,7 +17,7 @@ import com.github.javaparser.ast.nodeTypes.{NodeWithName, NodeWithSimpleName}
 import com.github.javaparser.ast.{CompilationUnit, ImportDeclaration, Node, PackageDeclaration}
 import com.github.javaparser.printer.configuration.DefaultPrinterConfiguration.ConfigOption
 import com.github.javaparser.printer.configuration.{DefaultConfigurationOption, DefaultPrinterConfiguration}
-import com.github.javaparser.resolution.UnsolvedSymbolException
+import com.github.javaparser.resolution.{MethodAmbiguityException, UnsolvedSymbolException}
 import com.github.javaparser.resolution.declarations.{
   ResolvedMethodDeclaration,
   ResolvedMethodLikeDeclaration,
@@ -245,6 +245,35 @@ class AstCreator(
   }
 
   private[astcreation] def tryWithSafeStackOverflow[T](expr: => T): Try[T] = {
+    val allowedExceptions: List[(Class[?], String)] = List(
+      (classOf[UnsolvedSymbolException], ""),
+      (classOf[MethodAmbiguityException], ""),
+      (
+        /* https://github.com/joernio/joern/issues/4913 */
+        classOf[IllegalStateException],
+        "No data of this type found. Use containsData to check for this first."
+      ),
+      (
+        /* https://github.com/joernio/joern/issues/4911 */
+        classOf[UnsupportedOperationException],
+        "java.lang.UnsupportedOperationException: com.github.javaparser.ast.expr.SingleMemberAnnotationExpr"
+      ),
+      (
+        /* https://github.com/joernio/joern/issues/4912 */
+        classOf[IllegalArgumentException],
+        "expected either zero type arguments or has many as defined in the declaration"
+      ),
+      (
+        /* https://github.com/joernio/joern/issues/4914 */
+        classOf[NullPointerException],
+        "Cannot invoke \"com.github.javaparser.resolution.types.ResolvedType.isWildcard()\" because \"type\" is null"
+      ),
+      (
+        /* https://github.com/joernio/joern/issues/4915 */
+        classOf[ClassCastException],
+        "class com.github.javaparser.ast.NodeList cannot be cast to class com.github.javaparser.ast.nodeTypes.NodeWithTypeArguments (com.github.javaparser.ast.NodeList and com.github.javaparser.ast.nodeTypes.NodeWithTypeArguments are in unnamed module of loader 'app')"
+      )
+    )
     try {
 
       /** JavaParser throws UnsolvedSymbolExceptions if a type cannot be solved, which is usually an expected occurrence
@@ -252,20 +281,26 @@ class AstCreator(
         * unresolved types or a bug, don't log them.
         */
       Try(expr) match {
-        case success: Success[_]                         => success
-        case Failure(exception: UnsolvedSymbolException) => Failure(exception)
+        case success: Success[_] => success
         case failure: Failure[_] =>
-          val exceptionType = failure.exception.getClass
+          val exception     = failure.exception
+          val exceptionType = exception.getClass
 
-          val loggedCount = loggedExceptionCounts.updateWith(exceptionType) {
-            case Some(value) => Some(value + 1)
-            case None        => Some(1)
+          if (
+            !allowedExceptions.exists { case (allowedClass, allowedPrefix) =>
+              exception.getClass == allowedClass && Option(exception.getMessage).exists(_.startsWith(allowedPrefix))
+            }
+          ) {
+            val loggedCount = loggedExceptionCounts.updateWith(exceptionType) {
+              case Some(value) => Some(value + 1)
+              case None        => Some(1)
+            }
+
+            if (loggedCount.exists(_ <= 3)) {
+              logger.warn(exception.getMessage)
+              logger.debug("tryWithFailureLogging encountered exception", exception)
+            }
           }
-
-          if (loggedCount.exists(_ <= 3)) {
-            logger.debug("tryWithFailureLogging encountered exception", failure.exception)
-          }
-
           failure
       }
     } catch {
