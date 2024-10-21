@@ -88,9 +88,18 @@ object JavaScopeElement {
   class MethodScope(val method: NewMethod, val returnType: ExpectedType, override val isStatic: Boolean)
       extends JavaScopeElement
       with AnonymousClassCounter {
+
+    private val temporaryLocals = mutable.ListBuffer[NewLocal]()
+
     def addParameter(parameter: NewMethodParameterIn): Unit = {
       addVariableToScope(ScopeParameter(parameter))
     }
+
+    def addTemporaryLocal(local: NewLocal): Unit = {
+      temporaryLocals.addOne(local)
+    }
+
+    def getTemporaryLocals: List[NewLocal] = temporaryLocals.toList
   }
 
   class FieldDeclScope(override val isStatic: Boolean, val name: String) extends JavaScopeElement

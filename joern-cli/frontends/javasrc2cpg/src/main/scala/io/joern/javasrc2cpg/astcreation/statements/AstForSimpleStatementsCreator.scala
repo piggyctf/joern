@@ -32,7 +32,12 @@ import scala.jdk.OptionConverters.RichOptional
 import io.joern.javasrc2cpg.scope.JavaScopeElement.PartialInit
 
 trait AstForSimpleStatementsCreator { this: AstCreator =>
-  def astForBlockStatement(stmt: BlockStmt, codeStr: String = "<empty>", prefixAsts: Seq[Ast] = Seq.empty): Ast = {
+  def astForBlockStatement(
+    stmt: BlockStmt,
+    codeStr: String = "<empty>",
+    prefixAsts: Seq[Ast] = Seq.empty,
+    includeTemporaryLocals: Boolean = false
+  ): Ast = {
     val block = NewBlock()
       .code(codeStr)
       .lineNumber(line(stmt))
@@ -42,8 +47,15 @@ trait AstForSimpleStatementsCreator { this: AstCreator =>
 
     val stmtAsts = stmt.getStatements.asScala.flatMap(astsForStatement)
 
+    val temporaryLocalAsts =
+      if (includeTemporaryLocals)
+        scope.enclosingMethod.map(_.getTemporaryLocals).getOrElse(Nil).map(Ast(_))
+      else
+        Nil
+
     scope.popBlockScope()
     Ast(block)
+      .withChildren(temporaryLocalAsts)
       .withChildren(prefixAsts)
       .withChildren(stmtAsts)
   }

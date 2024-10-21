@@ -92,7 +92,9 @@ private[declarations] trait AstForMethodsCreator { this: AstCreator =>
       scope.enclosingMethod.get.addParameter(node)
     }
 
-    val bodyAst = methodDeclaration.getBody.toScala.map(astForBlockStatement(_)).getOrElse(Ast(NewBlock()))
+    val bodyAst = methodDeclaration.getBody.toScala
+      .map(astForBlockStatement(_, includeTemporaryLocals = true))
+      .getOrElse(Ast(NewBlock()))
     val (lineNr, columnNr) = tryWithSafeStackOverflow(methodDeclaration.getType) match {
       case Success(typ) => (line(typ), column(typ))
       case Failure(_)   => (line(methodDeclaration), column(methodDeclaration))
@@ -198,7 +200,8 @@ private[declarations] trait AstForMethodsCreator { this: AstCreator =>
 
     val thisNode = thisNodeForMethod(typeFullName, lineNumber = None)
     scope.enclosingMethod.foreach(_.addParameter(thisNode))
-    val bodyStatementAsts = astsForFieldInitializers(instanceFieldDeclarations)
+    val bodyStatementAsts  = astsForFieldInitializers(instanceFieldDeclarations)
+    val temporaryLocalAsts = scope.enclosingMethod.map(_.getTemporaryLocals).getOrElse(Nil).map(Ast(_))
 
     val returnNode = newMethodReturnNode(TypeConstants.Void, line = None, column = None)
 
@@ -209,7 +212,7 @@ private[declarations] trait AstForMethodsCreator { this: AstCreator =>
         constructorNode,
         thisNode,
         explicitParameterAsts = Nil,
-        bodyStatementAsts = bodyStatementAsts,
+        bodyStatementAsts = temporaryLocalAsts ++ bodyStatementAsts,
         methodReturn = returnNode,
         annotationAsts = Nil,
         modifiers = modifiers,

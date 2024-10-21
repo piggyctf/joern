@@ -273,22 +273,28 @@ trait AstForSimpleExpressionsCreator { this: AstCreator =>
   }
 
   private[expressions] def astForInstanceOfExpr(expr: InstanceOfExpr): Ast = {
-    val booleanTypeFullName = Some(TypeConstants.Boolean)
-    val callNode =
-      newOperatorCallNode(Operators.instanceOf, expr.toString, booleanTypeFullName, line(expr), column(expr))
+    expr.getPattern.toScala
+      .map { patternExpression =>
+        astForInstanceOfWithPattern(expr, patternExpression)
+      }
+      .getOrElse {
+        val booleanTypeFullName = Some(TypeConstants.Boolean)
+        val callNode =
+          newOperatorCallNode(Operators.instanceOf, expr.toString, booleanTypeFullName, line(expr), column(expr))
 
-    val exprAst      = astsForExpression(expr.getExpression, ExpectedType.empty)
-    val exprType     = tryWithSafeStackOverflow(expr.getType).toOption
-    val typeFullName = exprType.flatMap(typeInfoCalc.fullName).getOrElse(TypeConstants.Any)
-    val typeNode =
-      NewTypeRef()
-        .code(exprType.map(_.toString).getOrElse(code(expr).split("instanceof").lastOption.getOrElse("")))
-        .lineNumber(line(expr))
-        .columnNumber(exprType.map(column(_)).getOrElse(column(expr)))
-        .typeFullName(typeFullName)
-    val typeAst = Ast(typeNode)
+        val exprAst      = astsForExpression(expr.getExpression, ExpectedType.empty)
+        val exprType     = tryWithSafeStackOverflow(expr.getType).toOption
+        val typeFullName = exprType.flatMap(typeInfoCalc.fullName).getOrElse(TypeConstants.Any)
+        val typeNode =
+          NewTypeRef()
+            .code(exprType.map(_.toString).getOrElse(code(expr).split("instanceof").lastOption.getOrElse("")))
+            .lineNumber(line(expr))
+            .columnNumber(exprType.map(column(_)).getOrElse(column(expr)))
+            .typeFullName(typeFullName)
+        val typeAst = Ast(typeNode)
 
-    callAst(callNode, exprAst ++ Seq(typeAst))
+        callAst(callNode, exprAst ++ Seq(typeAst))
+      }
   }
 
   private[expressions] def fieldAccessAst(
