@@ -1,5 +1,6 @@
 package io.joern.javasrc2cpg.scope
 
+import com.github.javaparser.ast.expr.TypePatternExpr
 import io.joern.javasrc2cpg.astcreation.ExpectedType
 import io.joern.javasrc2cpg.scope.Scope.*
 import io.joern.javasrc2cpg.scope.JavaScopeElement.*
@@ -337,6 +338,10 @@ object Scope {
   final case class ScopeMember(override val node: NewMember, isStatic: Boolean) extends ScopeVariable {
     val typeFullName: String = node.typeFullName
     val name: String         = node.name
+  }
+  final case class ScopePatternVariable(override val node: NewLocal, typePatternExpr: TypePatternExpr) extends ScopeVariable {
+    val typeFullName: String = node.typeFullName
+    val name: String = node.name
   }
 
   sealed trait VariableLookupResult {

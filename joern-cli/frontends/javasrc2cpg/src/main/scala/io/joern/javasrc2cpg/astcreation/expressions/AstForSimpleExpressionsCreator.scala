@@ -21,6 +21,8 @@ import com.github.javaparser.ast.expr.{
   UnaryExpr
 }
 import com.github.javaparser.ast.nodeTypes.NodeWithName
+import com.github.javaparser.symbolsolver.javaparsermodel.contexts.BinaryExprContext
+import com.github.javaparser.symbolsolver.resolution.typesolvers.CombinedTypeSolver
 import io.joern.javasrc2cpg.astcreation.{AstCreator, ExpectedType}
 import io.joern.javasrc2cpg.typesolvers.TypeInfoCalculator
 import io.joern.javasrc2cpg.typesolvers.TypeInfoCalculator.TypeConstants
@@ -155,8 +157,23 @@ trait AstForSimpleExpressionsCreator { this: AstCreator =>
       case BinaryExpr.Operator.REMAINDER            => Operators.modulo
     }
 
-    val args =
-      astsForExpression(expr.getLeft, expectedType) ++ astsForExpression(expr.getRight, expectedType)
+    val lhsArgs = astsForExpression(expr.getLeft, expectedType)
+
+    scope.pushBlockScope()
+    val context = new BinaryExprContext(expr, new CombinedTypeSolver())
+
+    context
+      .typePatternExprsExposedToChild(expr.getRight)
+      .asScala
+      .flatMap(pattern => scope.enclosingMethod.flatMap(_.getPatternVariableInfo(pattern)))
+      .foreach { case (pattern, local, _) =>
+        scope.enclosingBlock.foreach(_.addPatternLocal(local, pattern))
+      }
+
+    val rhsArgs = astsForExpression(expr.getRight, expectedType)
+    scope.popBlockScope()
+
+    val args = lhsArgs ++ rhsArgs
 
     val typeFullName =
       expressionReturnTypeFullName(expr)

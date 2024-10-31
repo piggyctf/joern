@@ -1,5 +1,6 @@
 package io.joern.javasrc2cpg.scope
 
+import com.github.javaparser.ast.expr.TypePatternExpr
 import io.joern.javasrc2cpg.scope.Scope.*
 import io.joern.javasrc2cpg.scope.JavaScopeElement.*
 import io.shiftleft.codepropertygraph.generated.nodes.{NewImport, NewMethod, NewNamespaceBlock, NewTypeDecl}
@@ -13,6 +14,9 @@ import io.shiftleft.codepropertygraph.generated.nodes.NewMember
 import io.joern.javasrc2cpg.util.{BindingTable, BindingTableEntry, NameConstants}
 import io.joern.x2cpg.utils.IntervalKeyPool
 import io.joern.x2cpg.Ast
+
+import java.util
+import scala.jdk.CollectionConverters.*
 
 trait JavaScopeElement {
   private val variables                        = mutable.Map[String, ScopeVariable]()
@@ -83,6 +87,10 @@ object JavaScopeElement {
     def addLocal(local: NewLocal): Unit = {
       addVariableToScope(ScopeLocal(local))
     }
+
+    def addPatternLocal(local: NewLocal, typePatternExpr: TypePatternExpr): Unit = {
+      addVariableToScope(ScopePatternVariable(local, typePatternExpr))
+    }
   }
 
   class MethodScope(val method: NewMethod, val returnType: ExpectedType, override val isStatic: Boolean)
@@ -90,6 +98,8 @@ object JavaScopeElement {
       with AnonymousClassCounter {
 
     private val temporaryLocals = mutable.ListBuffer[NewLocal]()
+    private val patternVariableInfoIdentityMap: mutable.Map[TypePatternExpr, (NewLocal, Option[Ast])] =
+      new util.IdentityHashMap[TypePatternExpr, (NewLocal, Option[Ast])]().asScala
 
     def addParameter(parameter: NewMethodParameterIn): Unit = {
       addVariableToScope(ScopeParameter(parameter))
@@ -100,6 +110,26 @@ object JavaScopeElement {
     }
 
     def getTemporaryLocals: List[NewLocal] = temporaryLocals.toList
+
+    def putPatternVariableInfo(
+      typePatternExpr: TypePatternExpr,
+      typeVariableLocal: NewLocal,
+      typeVariableInitializer: Ast
+    ): Unit = {
+      patternVariableInfoIdentityMap.put(typePatternExpr, (typeVariableLocal, Option(typeVariableInitializer)))
+    }
+
+    def getPatternVariableInfo(typePatternExpr: TypePatternExpr): Option[(TypePatternExpr, NewLocal, Option[Ast])] = {
+      patternVariableInfoIdentityMap.get(typePatternExpr).map { case (local, maybeAst) =>
+        (typePatternExpr, local, maybeAst)
+      }
+    }
+
+    def clearPatternVariableInitializer(typePatternExpr: TypePatternExpr): Unit = {
+      patternVariableInfoIdentityMap.get(typePatternExpr).foreach { case (variableLocal, _) =>
+        patternVariableInfoIdentityMap.put(typePatternExpr, (variableLocal, None))
+      }
+    }
   }
 
   class FieldDeclScope(override val isStatic: Boolean, val name: String) extends JavaScopeElement

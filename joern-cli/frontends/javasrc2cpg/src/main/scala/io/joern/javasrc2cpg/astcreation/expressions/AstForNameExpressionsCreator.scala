@@ -14,6 +14,7 @@ import io.joern.javasrc2cpg.scope.Scope.{
   NotInScope,
   ScopeMember,
   ScopeParameter,
+  ScopePatternVariable,
   ScopeVariable,
   SimpleVariable
 }
@@ -49,6 +50,16 @@ trait AstForNameExpressionsCreator { this: AstCreator =>
           line(nameExpr),
           column(nameExpr)
         )
+
+      case SimpleVariable(ScopePatternVariable(localNode, typePatternExpr)) =>
+        scope.enclosingMethod.flatMap(_.getPatternVariableInfo(typePatternExpr)) match {
+          case Some(_, _, Some(initializerAst)) =>
+            scope.enclosingMethod.foreach(_.clearPatternVariableInitializer(typePatternExpr))
+            initializerAst
+          case _ =>
+            val identifier = identifierNode(nameExpr, localNode.name, localNode.name, localNode.typeFullName)
+            Ast(identifier).withRefEdge(identifier, localNode)
+        }
 
       case SimpleVariable(variable) =>
         val identifier = identifierNode(nameExpr, name, name, typeFullName.getOrElse(TypeConstants.Any))

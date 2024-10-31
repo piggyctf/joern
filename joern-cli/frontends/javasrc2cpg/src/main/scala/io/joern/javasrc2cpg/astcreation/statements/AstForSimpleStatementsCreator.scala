@@ -1,5 +1,6 @@
 package io.joern.javasrc2cpg.astcreation.statements
 
+import com.github.javaparser.ast.expr.TypePatternExpr
 import com.github.javaparser.ast.stmt.{
   AssertStmt,
   BlockStmt,
@@ -19,6 +20,8 @@ import com.github.javaparser.ast.stmt.{
   TryStmt,
   WhileStmt
 }
+import com.github.javaparser.symbolsolver.javaparsermodel.contexts.IfStatementContext
+import com.github.javaparser.symbolsolver.resolution.typesolvers.CombinedTypeSolver
 import io.joern.javasrc2cpg.astcreation.{AstCreator, ExpectedType}
 import io.joern.javasrc2cpg.typesolvers.TypeInfoCalculator.TypeConstants
 import io.joern.javasrc2cpg.util.NameConstants
@@ -30,6 +33,10 @@ import io.shiftleft.codepropertygraph.generated.{ControlStructureTypes, Dispatch
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.RichOptional
 import io.joern.javasrc2cpg.scope.JavaScopeElement.PartialInit
+
+import java.util
+import java.util.Collections
+import scala.collection.mutable
 
 trait AstForSimpleStatementsCreator { this: AstCreator =>
   def astForBlockStatement(
@@ -147,7 +154,7 @@ trait AstForSimpleStatementsCreator { this: AstCreator =>
     whileAst(conditionAst, stmtAsts, Some(code), lineNumber, columnNumber)
   }
 
-  private[statements] def astForIf(stmt: IfStmt): Ast = {
+  private[statements] def astsForIf(stmt: IfStmt): Seq[Ast] = {
     val ifNode =
       NewControlStructure()
         .controlStructureType(ControlStructureTypes.IF)
@@ -158,20 +165,110 @@ trait AstForSimpleStatementsCreator { this: AstCreator =>
     val conditionAst =
       astsForExpression(stmt.getCondition, ExpectedType.Boolean).headOption.toList
 
-    val thenAsts = astsForStatement(stmt.getThenStmt)
-    val elseAst  = astForElse(stmt.getElseStmt.toScala).toList
+    val ifContext = new IfStatementContext(stmt, new CombinedTypeSolver())
+
+    // TODO Move into separate method, probably
+    val patternsIntroducedByIf =
+      Collections.newSetFromMap(new util.IdentityHashMap[TypePatternExpr, java.lang.Boolean]())
+    patternsIntroducedByIf.addAll(ifContext.getIntroducedTypePatterns)
+
+    val patternsIntroducedToThen =
+      Collections.newSetFromMap(new util.IdentityHashMap[TypePatternExpr, java.lang.Boolean](2))
+    patternsIntroducedToThen.addAll(ifContext.typePatternExprsExposedToChild(stmt.getThenStmt))
+
+    val patternsIntroducedToElse =
+      Collections.newSetFromMap(new util.IdentityHashMap[TypePatternExpr, java.lang.Boolean]())
+    stmt.getElseStmt.toScala.foreach { elseStmt =>
+      patternsIntroducedToElse.addAll(ifContext.typePatternExprsExposedToChild(elseStmt))
+    }
+    patternsIntroducedToThen.addAll(ifContext.typePatternExprsExposedToChild(stmt.getThenStmt))
+
+    val astsAddedBeforeIf = mutable.ListBuffer[Ast]()
+    val astsAddedAfterIf  = mutable.ListBuffer[Ast]()
+    val astsAddedToThen   = mutable.ListBuffer[Ast]()
+    val astsAddedToElse   = mutable.ListBuffer[Ast]()
+
+    val patternSet = Collections.newSetFromMap(new util.IdentityHashMap[TypePatternExpr, java.lang.Boolean]())
+    patternSet.addAll(patternsIntroducedByIf)
+    patternSet.addAll(patternsIntroducedToThen)
+    patternSet.addAll(patternsIntroducedToElse)
+
+    patternSet.asScala
+      .flatMap(patternExpr => scope.enclosingMethod.flatMap(_.getPatternVariableInfo(patternExpr)))
+      .foreach {
+        case (_, variableLocal, None) => astsAddedBeforeIf.addOne(Ast(variableLocal))
+
+        case (pattern, variableLocal, Some(initializer)) =>
+          if (patternsIntroducedByIf.contains(pattern)) {
+            if (patternsIntroducedToThen.contains(pattern) || patternsIntroducedToElse.contains(pattern)) {
+              astsAddedBeforeIf.addOne(Ast(variableLocal))
+              astsAddedBeforeIf.addOne(initializer)
+            } else {
+              astsAddedAfterIf.addOne(Ast(variableLocal))
+              astsAddedAfterIf.addOne(initializer)
+            }
+          } else {
+            // TODO Check flow chart and fix this
+            if (patternsIntroducedToThen.contains(pattern)) {
+              astsAddedToThen.addOne(Ast(variableLocal))
+              astsAddedToThen.addOne(initializer)
+            } else if (patternsIntroducedToElse.contains(pattern)) {
+              astsAddedToElse.addOne(Ast(variableLocal))
+              astsAddedToElse.addOne(initializer)
+            }
+          }
+          scope.enclosingMethod.foreach(_.clearPatternVariableInitializer(pattern))
+
+      }
+
+    // End TODO Move into separate method
+
+    scope.pushBlockScope()
+    patternsIntroducedToThen.asScala.flatMap(scope.enclosingMethod.get.getPatternVariableInfo(_)).foreach {
+      case (typePatternExpr, variableLocal, _) =>
+        scope.enclosingBlock.get.addPatternLocal(variableLocal, typePatternExpr)
+    }
+    val thenAst = stmt.getThenStmt match {
+      case blockStmt: BlockStmt => astForBlockStatement(blockStmt, prefixAsts = astsAddedToThen.toList)
+
+      case stmt: Statement =>
+        val elseStmts = astsForStatement(stmt)
+        blockAst(blockNode(stmt), astsAddedToThen.toList ++ elseStmts)
+    }
+    scope.popBlockScope()
+
+    scope.pushBlockScope()
+    patternsIntroducedToElse.asScala.flatMap(scope.enclosingMethod.get.getPatternVariableInfo(_)).foreach {
+      case (typePatternExpr, variableLocal, _) =>
+        scope.enclosingBlock.get.addPatternLocal(variableLocal, typePatternExpr)
+    }
+    val elseAst = stmt.getElseStmt.toScala.map {
+      case blockStmt: BlockStmt => astForBlockStatement(blockStmt, prefixAsts = astsAddedToElse.toList)
+
+      case stmt: Statement =>
+        val elseStmts = astsForStatement(stmt)
+        blockAst(blockNode(stmt), astsAddedToElse.toList ++ elseStmts)
+    }
+    scope.popBlockScope()
+
+    patternsIntroducedByIf.asScala.flatMap(scope.enclosingMethod.get.getPatternVariableInfo(_)).foreach {
+      case (typePatternExpr, variableLocal, _) =>
+        scope.enclosingBlock.get.addPatternLocal(variableLocal, typePatternExpr)
+    }
 
     val ast = Ast(ifNode)
       .withChildren(conditionAst)
-      .withChildren(thenAsts)
-      .withChildren(elseAst)
+      .withChild(thenAst)
+      .withChildren(elseAst.toList)
 
-    conditionAst.flatMap(_.root.toList) match {
+    val astWithConditionEdge = conditionAst.flatMap(_.root.toList) match {
       case r :: Nil =>
         ast.withConditionEdge(ifNode, r)
       case _ =>
         ast
     }
+
+    astsAddedBeforeIf.toList ++ (astWithConditionEdge :: astsAddedAfterIf.toList)
   }
 
   private[statements] def astForElse(maybeStmt: Option[Statement]): Option[Ast] = {
