@@ -280,6 +280,14 @@ class Scope {
       case _ => None
     }
   }
+
+  def addLocalsForPatternsToEnclosingBlock(patterns: List[TypePatternExpr]): Unit = {
+    patterns.flatMap(enclosingMethod.get.getPatternVariableInfo(_)).foreach {
+      case (typePatternExpr, variableLocal, _) =>
+        enclosingBlock.get.addPatternLocal(variableLocal, typePatternExpr)
+    }
+  }
+
 }
 
 object Scope {
@@ -339,9 +347,10 @@ object Scope {
     val typeFullName: String = node.typeFullName
     val name: String         = node.name
   }
-  final case class ScopePatternVariable(override val node: NewLocal, typePatternExpr: TypePatternExpr) extends ScopeVariable {
+  final case class ScopePatternVariable(override val node: NewLocal, typePatternExpr: TypePatternExpr)
+      extends ScopeVariable {
     val typeFullName: String = node.typeFullName
-    val name: String = node.name
+    val name: String         = node.name
   }
 
   sealed trait VariableLookupResult {

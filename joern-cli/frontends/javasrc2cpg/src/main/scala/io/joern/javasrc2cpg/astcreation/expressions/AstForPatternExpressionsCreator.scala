@@ -18,8 +18,9 @@ trait AstForPatternExpressionsCreator { this: AstCreator =>
     // TODO: handle multiple ASTs
     val exprAst = astsForExpression(expression, ExpectedType.empty).head
 
-    val (lhsAst, lhsIdentifier) = exprAst.nodes.toList match {
-      case (identifier: NewIdentifier) :: Nil => (exprAst, identifier)
+    val (lhsAst, lhsIdentifier, lhsRefsTo) = exprAst.nodes.toList match {
+      case (identifier: NewIdentifier) :: Nil =>
+        (exprAst, identifier, scope.lookupVariable(identifier.name).variableNode)
 
       case _ =>
         val tmpName       = tempNameProvider.next
@@ -43,29 +44,34 @@ trait AstForPatternExpressionsCreator { this: AstCreator =>
 
         (
           callAst(tmpAssignmentNode, Ast(tmpIdentifier) :: exprAst :: Nil).withRefEdge(tmpIdentifier, tmpLocal),
-          tmpIdentifier
+          tmpIdentifier,
+          Option(tmpLocal)
         )
     }
 
-    val patternTypeFullName =
-      tryWithSafeStackOverflow(typeInfoCalc.fullName(pattern.getType)).toOption.flatten.getOrElse(TypeConstants.Any)
+    val patternTypeFullName = {
+      tryWithSafeStackOverflow(pattern.getType).toOption
+        .flatMap(typ => scope.lookupScopeType(typ.asString()).map(_.typeFullName).orElse(typeInfoCalc.fullName(typ)))
+        .getOrElse(TypeConstants.Any)
+    }
 
-    val patternTypeRef = typeRefNode(pattern.getType, patternTypeFullName, patternTypeFullName)
+    val patternTypeRef = typeRefNode(pattern.getType, code(pattern.getType), patternTypeFullName)
 
-    // TODO Create pattern variable local + initializer and add to scope
-    // TODO Make sure names are mangled where necessary
     val typePatterns = getTypePatterns(pattern)
 
     typePatterns.foreach { typePatternExpr =>
       val variableName = typePatternExpr.getNameAsString
-      val variableType = tryWithSafeStackOverflow(typeInfoCalc.fullName(typePatternExpr.getType)).toOption.flatten
-        .getOrElse(TypeConstants.Any)
+      val variableType = {
+        tryWithSafeStackOverflow(typePatternExpr.getType).toOption
+          .flatMap(typ => scope.lookupScopeType(typ.asString()).map(_.typeFullName).orElse(typeInfoCalc.fullName(typ)))
+          .getOrElse(TypeConstants.Any)
+      }
       val variableTypeCode = tryWithSafeStackOverflow(code(typePatternExpr.getType)).getOrElse(variableType)
 
       val patternLocal      = localNode(typePatternExpr, variableName, code(typePatternExpr), variableType)
-      val patternIdentifier = identifierNode(typePatternExpr, variableName, code(typePatternExpr), variableType)
+      val patternIdentifier = identifierNode(typePatternExpr, variableName, variableName, variableType)
       // TODO Handle record pattern initializers
-      val patternInitializerCastType = typeRefNode(typePatternExpr, variableTypeCode, variableType)
+      val patternInitializerCastType = typeRefNode(typePatternExpr, code(typePatternExpr.getType), variableType)
       val patternInitializerCastRhs  = lhsIdentifier.copy
       val patternInitializerCast = newOperatorCallNode(
         Operators.cast,
@@ -77,7 +83,7 @@ trait AstForPatternExpressionsCreator { this: AstCreator =>
 
       val initializerCastAst =
         callAst(patternInitializerCast, Ast(patternInitializerCastType) :: Ast(patternInitializerCastRhs) :: Nil)
-          .withRefEdge(patternInitializerCastRhs, patternLocal)
+          .withRefEdges(patternInitializerCastRhs, lhsRefsTo.toList)
 
       val initializerAssignmentCall = newOperatorCallNode(
         Operators.assignment,
@@ -98,7 +104,7 @@ trait AstForPatternExpressionsCreator { this: AstCreator =>
 
     val instanceOfCall = newOperatorCallNode(
       Operators.instanceOf,
-      s"${code(instanceOfExpr.getExpression)} instanceof $patternTypeFullName",
+      s"${code(instanceOfExpr.getExpression)} instanceof ${code(pattern.getType)}",
       Option(TypeConstants.Boolean)
     )
 

@@ -20,7 +20,11 @@ import com.github.javaparser.ast.stmt.{
   TryStmt,
   WhileStmt
 }
-import com.github.javaparser.symbolsolver.javaparsermodel.contexts.IfStatementContext
+import com.github.javaparser.symbolsolver.javaparsermodel.contexts.{
+  DoStatementContext,
+  IfStatementContext,
+  WhileStatementContext
+}
 import com.github.javaparser.symbolsolver.resolution.typesolvers.CombinedTypeSolver
 import io.joern.javasrc2cpg.astcreation.{AstCreator, ExpectedType}
 import io.joern.javasrc2cpg.typesolvers.TypeInfoCalculator.TypeConstants
@@ -33,12 +37,22 @@ import io.shiftleft.codepropertygraph.generated.{ControlStructureTypes, Dispatch
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.RichOptional
 import io.joern.javasrc2cpg.scope.JavaScopeElement.PartialInit
+import org.slf4j.LoggerFactory
 
-import java.util
-import java.util.Collections
-import scala.collection.mutable
+// TODO proper comment, but `body` means `then` for if stmt
+private case class PatternAstPartition(
+  patternsIntroducedToBody: List[TypePatternExpr],
+  patternsIntroducedToElse: List[TypePatternExpr],
+  patternsIntroducedByStatement: List[TypePatternExpr],
+  astsAddedBeforeStatement: List[Ast],
+  astsAddedToBody: List[Ast],
+  astsAddedToElse: List[Ast],
+  astsAddedAfterStatement: List[Ast]
+)
 
 trait AstForSimpleStatementsCreator { this: AstCreator =>
+  private val logger = LoggerFactory.getLogger(this.getClass)
+
   def astForBlockStatement(
     stmt: BlockStmt,
     codeStr: String = "<empty>",
@@ -134,24 +148,48 @@ trait AstForSimpleStatementsCreator { this: AstCreator =>
     Ast(node)
   }
 
-  private[statements] def astForDo(stmt: DoStmt): Ast = {
+  private[statements] def astsForDo(stmt: DoStmt): List[Ast] = {
     val conditionAst = astsForExpression(stmt.getCondition, ExpectedType.Boolean).headOption
-    val stmtAsts     = astsForStatement(stmt.getBody)
+
+    val doContext = new DoStatementContext(stmt, new CombinedTypeSolver())
+
+    val patternPartition = partitionPatternAstsByScope(doContext)
+
+    scope.pushBlockScope()
+    scope.addLocalsForPatternsToEnclosingBlock(patternPartition.patternsIntroducedToBody)
+    val bodyAst = wrapInBlockWithPrefix(stmt.getBody, patternPartition.astsAddedToBody)
+    scope.popBlockScope()
+
+    scope.addLocalsForPatternsToEnclosingBlock(patternPartition.patternsIntroducedByStatement)
+
     val code         = s"do {...} while (${stmt.getCondition.toString})"
     val lineNumber   = line(stmt)
     val columnNumber = column(stmt)
 
-    doWhileAst(conditionAst, stmtAsts, Some(code), lineNumber, columnNumber)
+    val ast = doWhileAst(conditionAst, List(bodyAst), Some(code), lineNumber, columnNumber)
+    patternPartition.astsAddedBeforeStatement ++ (ast :: patternPartition.astsAddedAfterStatement)
   }
 
-  private[statements] def astForWhile(stmt: WhileStmt): Ast = {
+  private[statements] def astsForWhile(stmt: WhileStmt): List[Ast] = {
     val conditionAst = astsForExpression(stmt.getCondition, ExpectedType.Boolean).headOption
-    val stmtAsts     = astsForStatement(stmt.getBody)
+
+    val whileContext = new WhileStatementContext(stmt, new CombinedTypeSolver())
+
+    val patternPartition = partitionPatternAstsByScope(whileContext)
+
+    scope.pushBlockScope()
+    scope.addLocalsForPatternsToEnclosingBlock(patternPartition.patternsIntroducedToBody)
+    val bodyAst = wrapInBlockWithPrefix(stmt.getBody, patternPartition.astsAddedToBody)
+    scope.popBlockScope()
+
+    scope.addLocalsForPatternsToEnclosingBlock(patternPartition.patternsIntroducedByStatement)
+
     val code         = s"while (${stmt.getCondition.toString})"
     val lineNumber   = line(stmt)
     val columnNumber = column(stmt)
 
-    whileAst(conditionAst, stmtAsts, Some(code), lineNumber, columnNumber)
+    val ast = whileAst(conditionAst, List(bodyAst), Some(code), lineNumber, columnNumber)
+    patternPartition.astsAddedBeforeStatement ++ (ast :: patternPartition.astsAddedAfterStatement)
   }
 
   private[statements] def astsForIf(stmt: IfStmt): Seq[Ast] = {
@@ -167,95 +205,31 @@ trait AstForSimpleStatementsCreator { this: AstCreator =>
 
     val ifContext = new IfStatementContext(stmt, new CombinedTypeSolver())
 
-    // TODO Move into separate method, probably
-    val patternsIntroducedByIf =
-      Collections.newSetFromMap(new util.IdentityHashMap[TypePatternExpr, java.lang.Boolean]())
-    patternsIntroducedByIf.addAll(ifContext.getIntroducedTypePatterns)
-
-    val patternsIntroducedToThen =
-      Collections.newSetFromMap(new util.IdentityHashMap[TypePatternExpr, java.lang.Boolean](2))
-    patternsIntroducedToThen.addAll(ifContext.typePatternExprsExposedToChild(stmt.getThenStmt))
-
-    val patternsIntroducedToElse =
-      Collections.newSetFromMap(new util.IdentityHashMap[TypePatternExpr, java.lang.Boolean]())
-    stmt.getElseStmt.toScala.foreach { elseStmt =>
-      patternsIntroducedToElse.addAll(ifContext.typePatternExprsExposedToChild(elseStmt))
-    }
-    patternsIntroducedToThen.addAll(ifContext.typePatternExprsExposedToChild(stmt.getThenStmt))
-
-    val astsAddedBeforeIf = mutable.ListBuffer[Ast]()
-    val astsAddedAfterIf  = mutable.ListBuffer[Ast]()
-    val astsAddedToThen   = mutable.ListBuffer[Ast]()
-    val astsAddedToElse   = mutable.ListBuffer[Ast]()
-
-    val patternSet = Collections.newSetFromMap(new util.IdentityHashMap[TypePatternExpr, java.lang.Boolean]())
-    patternSet.addAll(patternsIntroducedByIf)
-    patternSet.addAll(patternsIntroducedToThen)
-    patternSet.addAll(patternsIntroducedToElse)
-
-    patternSet.asScala
-      .flatMap(patternExpr => scope.enclosingMethod.flatMap(_.getPatternVariableInfo(patternExpr)))
-      .foreach {
-        case (_, variableLocal, None) => astsAddedBeforeIf.addOne(Ast(variableLocal))
-
-        case (pattern, variableLocal, Some(initializer)) =>
-          if (patternsIntroducedByIf.contains(pattern)) {
-            if (patternsIntroducedToThen.contains(pattern) || patternsIntroducedToElse.contains(pattern)) {
-              astsAddedBeforeIf.addOne(Ast(variableLocal))
-              astsAddedBeforeIf.addOne(initializer)
-            } else {
-              astsAddedAfterIf.addOne(Ast(variableLocal))
-              astsAddedAfterIf.addOne(initializer)
-            }
-          } else {
-            // TODO Check flow chart and fix this
-            if (patternsIntroducedToThen.contains(pattern)) {
-              astsAddedToThen.addOne(Ast(variableLocal))
-              astsAddedToThen.addOne(initializer)
-            } else if (patternsIntroducedToElse.contains(pattern)) {
-              astsAddedToElse.addOne(Ast(variableLocal))
-              astsAddedToElse.addOne(initializer)
-            }
-          }
-          scope.enclosingMethod.foreach(_.clearPatternVariableInitializer(pattern))
-
-      }
-
-    // End TODO Move into separate method
+    val patternPartition = partitionPatternAstsByScope(ifContext)
 
     scope.pushBlockScope()
-    patternsIntroducedToThen.asScala.flatMap(scope.enclosingMethod.get.getPatternVariableInfo(_)).foreach {
-      case (typePatternExpr, variableLocal, _) =>
-        scope.enclosingBlock.get.addPatternLocal(variableLocal, typePatternExpr)
-    }
+    scope.addLocalsForPatternsToEnclosingBlock(patternPartition.patternsIntroducedToBody)
     val thenAst = stmt.getThenStmt match {
-      case blockStmt: BlockStmt => astForBlockStatement(blockStmt, prefixAsts = astsAddedToThen.toList)
+      case blockStmt: BlockStmt => astForBlockStatement(blockStmt, prefixAsts = patternPartition.astsAddedToBody)
 
       case stmt: Statement =>
         val elseStmts = astsForStatement(stmt)
-        blockAst(blockNode(stmt), astsAddedToThen.toList ++ elseStmts)
+        blockAst(blockNode(stmt), patternPartition.astsAddedToBody ++ elseStmts)
     }
     scope.popBlockScope()
 
     scope.pushBlockScope()
-    patternsIntroducedToElse.asScala.flatMap(scope.enclosingMethod.get.getPatternVariableInfo(_)).foreach {
-      case (typePatternExpr, variableLocal, _) =>
-        scope.enclosingBlock.get.addPatternLocal(variableLocal, typePatternExpr)
-    }
+    scope.addLocalsForPatternsToEnclosingBlock(patternPartition.patternsIntroducedToElse)
     val elseAst = stmt.getElseStmt.toScala.map {
-      case blockStmt: BlockStmt => astForBlockStatement(blockStmt, prefixAsts = astsAddedToElse.toList)
+      case blockStmt: BlockStmt => astForBlockStatement(blockStmt, prefixAsts = patternPartition.astsAddedToElse)
 
       case stmt: Statement =>
         val elseStmts = astsForStatement(stmt)
-        blockAst(blockNode(stmt), astsAddedToElse.toList ++ elseStmts)
+        blockAst(blockNode(stmt), patternPartition.astsAddedToElse ++ elseStmts)
     }
     scope.popBlockScope()
 
-    patternsIntroducedByIf.asScala.flatMap(scope.enclosingMethod.get.getPatternVariableInfo(_)).foreach {
-      case (typePatternExpr, variableLocal, _) =>
-        scope.enclosingBlock.get.addPatternLocal(variableLocal, typePatternExpr)
-    }
-
+    scope.addLocalsForPatternsToEnclosingBlock(patternPartition.patternsIntroducedByStatement)
     val ast = Ast(ifNode)
       .withChildren(conditionAst)
       .withChild(thenAst)
@@ -268,7 +242,7 @@ trait AstForSimpleStatementsCreator { this: AstCreator =>
         ast
     }
 
-    astsAddedBeforeIf.toList ++ (astWithConditionEdge :: astsAddedAfterIf.toList)
+    patternPartition.astsAddedBeforeStatement ++ (astWithConditionEdge :: patternPartition.astsAddedAfterStatement)
   }
 
   private[statements] def astForElse(maybeStmt: Option[Statement]): Option[Ast] = {

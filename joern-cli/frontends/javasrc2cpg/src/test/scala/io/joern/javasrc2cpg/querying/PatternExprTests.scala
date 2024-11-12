@@ -2,7 +2,15 @@ package io.joern.javasrc2cpg.querying
 
 import io.joern.javasrc2cpg.testfixtures.JavaSrcCode2CpgFixture
 import io.shiftleft.codepropertygraph.generated.{ControlStructureTypes, Operators}
-import io.shiftleft.codepropertygraph.generated.nodes.{Block, Call, ControlStructure, FieldIdentifier, Identifier, Local, TypeRef}
+import io.shiftleft.codepropertygraph.generated.nodes.{
+  Block,
+  Call,
+  ControlStructure,
+  FieldIdentifier,
+  Identifier,
+  Local,
+  TypeRef
+}
 import io.shiftleft.semanticcpg.language.*
 
 class PatternExprTests extends JavaSrcCode2CpgFixture {
@@ -548,7 +556,7 @@ class PatternExprTests extends JavaSrcCode2CpgFixture {
                          |class Foo {
                          |  Integer s;
                          |  void foo(Object o) {
-                         |    for (; !(s instanceof String s);) {
+                         |    for (; !(o instanceof String s);) {
                          |      sink1(s);
                          |    }
                          |    sink2(s);
@@ -638,7 +646,7 @@ class PatternExprTests extends JavaSrcCode2CpgFixture {
 
             sAssign.name shouldBe Operators.assignment
             sAssign.methodFullName shouldBe Operators.assignment
-            sAssign.code shouldBe "String s = (String) o"
+            sAssign.code shouldBe "s = (String) o"
 
             inside(sAssign.argument.l) { case List(sIdentifier: Identifier, castExpr: Call) =>
               sIdentifier.name shouldBe "s"
@@ -1924,26 +1932,25 @@ class PatternExprTests extends JavaSrcCode2CpgFixture {
             bAssign.name shouldBe Operators.assignment
             bAssign.methodFullName shouldBe Operators.assignment
             bAssign.typeFullName shouldBe "ANY"
-            bAssign.code shouldBe "b = Bar.<unresolvedField>"
+            bAssign.code shouldBe "b = (Bar) o"
 
-            inside(bAssign.argument.l) { case List(bIdentifier: Identifier, fieldAccess: Call) =>
+            inside(bAssign.argument.l) { case List(bIdentifier: Identifier, castCall: Call) =>
               bIdentifier.name shouldBe "b"
               bIdentifier.code shouldBe "b"
               bIdentifier.typeFullName shouldBe "ANY"
               bIdentifier.refsTo.l shouldBe List(bLocal)
 
-              fieldAccess.name shouldBe Operators.fieldAccess
-              fieldAccess.methodFullName shouldBe Operators.fieldAccess
-              fieldAccess.typeFullName shouldBe "ANY"
-              fieldAccess.code shouldBe "Bar.<unresolvedField>"
+              castCall.name shouldBe Operators.cast
+              castCall.methodFullName shouldBe Operators.cast
+              castCall.typeFullName shouldBe "ANY"
+              castCall.code shouldBe "(Bar) o"
 
-              inside(fieldAccess.argument.l) {
-                case List(barIdentifier: Identifier, unresolvedFieldIdentifier: FieldIdentifier) =>
-                  barIdentifier.name shouldBe "Bar"
-                  barIdentifier.code shouldBe "Bar"
-                  barIdentifier.typeFullName shouldBe "ANY"
+              inside(castCall.argument.l) { case List(barType: TypeRef, oIdentifier: Identifier) =>
+                barType.code shouldBe "Bar"
+                barType.typeFullName shouldBe "ANY"
 
-                  unresolvedFieldIdentifier.canonicalName shouldBe "<unresolvedField>"
+                oIdentifier.name shouldBe "o"
+                oIdentifier.typeFullName shouldBe "java.lang.Object"
               }
             }
 
@@ -1994,27 +2001,27 @@ class PatternExprTests extends JavaSrcCode2CpgFixture {
 
             bAssign.name shouldBe Operators.assignment
             bAssign.methodFullName shouldBe Operators.assignment
-            bAssign.typeFullName shouldBe "ANY"
-            bAssign.code shouldBe "b = Bar.<unresolvedField>"
+            bAssign.typeFullName shouldBe "bar.Bar"
+            bAssign.code shouldBe "b = (Bar) o"
 
-            inside(bAssign.argument.l) { case List(bIdentifier: Identifier, fieldAccess: Call) =>
+            inside(bAssign.argument.l) { case List(bIdentifier: Identifier, castCall: Call) =>
               bIdentifier.name shouldBe "b"
               bIdentifier.code shouldBe "b"
               bIdentifier.typeFullName shouldBe "bar.Bar"
               bIdentifier.refsTo.l shouldBe List(bLocal)
 
-              fieldAccess.name shouldBe Operators.fieldAccess
-              fieldAccess.methodFullName shouldBe Operators.fieldAccess
-              fieldAccess.typeFullName shouldBe "ANY"
-              fieldAccess.code shouldBe "Bar.<unresolvedField>"
+              castCall.name shouldBe Operators.cast
+              castCall.methodFullName shouldBe Operators.cast
+              castCall.typeFullName shouldBe "bar.Bar"
+              castCall.code shouldBe "(Bar) o"
 
-              inside(fieldAccess.argument.l) {
-                case List(barIdentifier: Identifier, unresolvedFieldIdentifier: FieldIdentifier) =>
-                  barIdentifier.name shouldBe "Bar"
-                  barIdentifier.code shouldBe "Bar"
-                  barIdentifier.typeFullName shouldBe "bar.Bar"
+              inside(castCall.argument.l) { case List(barType: TypeRef, oIdentifier: Identifier) =>
+                barType.typeFullName shouldBe "bar.Bar"
 
-                  unresolvedFieldIdentifier.canonicalName shouldBe "<unresolvedField>"
+                oIdentifier.name shouldBe "o"
+                oIdentifier.code shouldBe "o"
+                oIdentifier.typeFullName shouldBe "java.lang.Object"
+                oIdentifier.refsTo.l shouldBe cpg.method.name("foo").parameter.name("o").l
               }
             }
 
@@ -2040,7 +2047,7 @@ class PatternExprTests extends JavaSrcCode2CpgFixture {
             oInstanceOfBar.name shouldBe Operators.instanceOf
             oInstanceOfBar.methodFullName shouldBe Operators.instanceOf
             oInstanceOfBar.typeFullName shouldBe "boolean"
-            oInstanceOfBar.code shouldBe "o instanceof Bar(Baz(Qux q))"
+            oInstanceOfBar.code shouldBe "o instanceof Bar"
 
             inside(oInstanceOfBar.argument.l) { case List(oIdentifier: Identifier, barType: TypeRef) =>
               oIdentifier.name shouldBe "o"
@@ -2058,7 +2065,7 @@ class PatternExprTests extends JavaSrcCode2CpgFixture {
         inside(cpg.controlStructure.controlStructureType(ControlStructureTypes.IF).astChildren.isBlock.astChildren.l) {
           case List(qLocal: Local, qAssign: Call, qSink: Call) =>
             qLocal.name shouldBe "q"
-            qLocal.code shouldBe "q"
+            qLocal.code shouldBe "Qux q"
             qLocal.typeFullName shouldBe "ANY"
 
             qAssign.name shouldBe Operators.assignment
