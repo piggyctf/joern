@@ -290,9 +290,11 @@ trait AstForSimpleExpressionsCreator { this: AstCreator =>
   }
 
   private[expressions] def astForInstanceOfExpr(expr: InstanceOfExpr): Ast = {
+    // TODO: handle multiple ASTs
+    val lhsAst = astsForExpression(expr.getExpression, ExpectedType.empty).head
     expr.getPattern.toScala
       .map { patternExpression =>
-        astForInstanceOfWithPattern(expr, patternExpression)
+        astForInstanceOfWithPattern(expr.getExpression, lhsAst, patternExpression)
       }
       .getOrElse {
         val booleanTypeFullName = Some(TypeConstants.Boolean)

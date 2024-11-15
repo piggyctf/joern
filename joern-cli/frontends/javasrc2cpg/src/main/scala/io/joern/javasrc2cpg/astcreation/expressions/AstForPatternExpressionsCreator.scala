@@ -1,8 +1,17 @@
 package io.joern.javasrc2cpg.astcreation.expressions
 
-import com.github.javaparser.ast.expr.{InstanceOfExpr, NameExpr, PatternExpr, RecordPatternExpr, TypePatternExpr}
+import com.github.javaparser.ast.Node
+import com.github.javaparser.ast.expr.{
+  Expression,
+  InstanceOfExpr,
+  NameExpr,
+  PatternExpr,
+  RecordPatternExpr,
+  TypePatternExpr
+}
 import io.joern.javasrc2cpg.astcreation.{AstCreator, ExpectedType}
 import io.joern.javasrc2cpg.jartypereader.model.Model.TypeConstants
+import io.joern.javasrc2cpg.scope.Scope.NewVariableNode
 import io.joern.x2cpg.Ast
 import io.joern.x2cpg.utils.AstPropertiesUtil.*
 import io.shiftleft.codepropertygraph.generated.nodes.{AstNodeNew, NewIdentifier}
@@ -13,28 +22,27 @@ import scala.jdk.CollectionConverters.*
 
 trait AstForPatternExpressionsCreator { this: AstCreator =>
 
-  private[astcreation] def astForInstanceOfWithPattern(instanceOfExpr: InstanceOfExpr, pattern: PatternExpr): Ast = {
-    val expression = instanceOfExpr.getExpression
-    // TODO: handle multiple ASTs
-    val exprAst = astsForExpression(expression, ExpectedType.empty).head
-
-    val (lhsAst, lhsIdentifier, lhsRefsTo) = exprAst.nodes.toList match {
+  private[astcreation] def astIdentifierAndRefsForPatternLhs(
+    rootNode: Node,
+    patternInitAst: Ast
+  ): (Ast, NewIdentifier, Option[NewVariableNode]) = {
+    patternInitAst.nodes.toList match {
       case (identifier: NewIdentifier) :: Nil =>
-        (exprAst, identifier, scope.lookupVariable(identifier.name).variableNode)
+        (patternInitAst, identifier, scope.lookupVariable(identifier.name).variableNode)
 
       case _ =>
         val tmpName       = tempNameProvider.next
-        val tmpType       = exprAst.rootType.getOrElse(TypeConstants.Object)
-        val tmpLocal      = localNode(expression, tmpName, tmpName, tmpType)
-        val tmpIdentifier = identifierNode(expression, tmpName, tmpName, tmpType)
+        val tmpType       = patternInitAst.rootType.getOrElse(TypeConstants.Object)
+        val tmpLocal      = localNode(rootNode, tmpName, tmpName, tmpType)
+        val tmpIdentifier = identifierNode(rootNode, tmpName, tmpName, tmpType)
 
         val tmpAssignmentNode =
           newOperatorCallNode(
             Operators.assignment,
-            s"$tmpName = ${exprAst.rootCodeOrEmpty}",
+            s"$tmpName = ${patternInitAst.rootCodeOrEmpty}",
             Option(tmpType),
-            line(expression),
-            column(expression)
+            line(rootNode),
+            column(rootNode)
           )
 
         // TODO Handle patterns in field initializers
@@ -43,11 +51,21 @@ trait AstForPatternExpressionsCreator { this: AstCreator =>
         scope.enclosingMethod.foreach(_.addTemporaryLocal(tmpLocal))
 
         (
-          callAst(tmpAssignmentNode, Ast(tmpIdentifier) :: exprAst :: Nil).withRefEdge(tmpIdentifier, tmpLocal),
+          callAst(tmpAssignmentNode, Ast(tmpIdentifier) :: patternInitAst :: Nil).withRefEdge(tmpIdentifier, tmpLocal),
           tmpIdentifier,
           Option(tmpLocal)
         )
     }
+  }
+
+  private[astcreation] def astForInstanceOfWithPattern(
+    instanceOfLhsExpr: Expression,
+    patternLhsInitAst: Ast,
+    pattern: PatternExpr
+  ): Ast = {
+
+    // TODO: Is this necessary for patterns?
+    val (lhsAst, lhsIdentifier, lhsRefsTo) = astIdentifierAndRefsForPatternLhs(instanceOfLhsExpr, patternLhsInitAst)
 
     val patternTypeFullName = {
       tryWithSafeStackOverflow(pattern.getType).toOption
@@ -102,9 +120,10 @@ trait AstForPatternExpressionsCreator { this: AstCreator =>
       }
     }
 
+    // TODO Should the code be instanceOfLhsExpr or lhsIdentifier code?
     val instanceOfCall = newOperatorCallNode(
       Operators.instanceOf,
-      s"${code(instanceOfExpr.getExpression)} instanceof ${code(pattern.getType)}",
+      s"${lhsAst.rootCodeOrEmpty} instanceof ${code(pattern.getType)}",
       Option(TypeConstants.Boolean)
     )
 

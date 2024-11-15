@@ -70,7 +70,7 @@ trait AstForForLoopsCreator { this: AstCreator =>
 
     scope.pushBlockScope()
     scope.addLocalsForPatternsToEnclosingBlock(patternPartition.patternsIntroducedToBody)
-    val bodyAst = wrapInBlockWithPrefix(stmt.getBody, patternPartition.astsAddedToBody)
+    val bodyAst = wrapInBlockWithPrefix(patternPartition.astsAddedToBody, stmt.getBody)
     scope.popBlockScope()
 
     scope.addLocalsForPatternsToEnclosingBlock(patternPartition.patternsIntroducedByStatement)

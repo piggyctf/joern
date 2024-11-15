@@ -8,6 +8,7 @@ import io.shiftleft.codepropertygraph.generated.nodes.{
   ControlStructure,
   FieldIdentifier,
   Identifier,
+  JumpTarget,
   Local,
   TypeRef
 }
@@ -1385,7 +1386,6 @@ class PatternExprTests extends JavaSrcCode2CpgFixture {
                          |  void foo(Object o) {
                          |    switch (o) {
                          |      case String s -> sink(s);
-                         |      default -> {}
                          |    }
                          |  }
                          |}
@@ -1399,34 +1399,49 @@ class PatternExprTests extends JavaSrcCode2CpgFixture {
         // TODO Should this be MATCH?
         inside(
           cpg.controlStructure.controlStructureType(ControlStructureTypes.SWITCH).astChildren.isBlock.astChildren.l
-        ) { case List(sLocal: Local, sAssign: Call, _: Call) =>
-          sLocal.name shouldBe "s"
-          sLocal.typeFullName shouldBe "java.lang.String"
-          sLocal.code shouldBe "String s"
-
-          sAssign.name shouldBe Operators.assignment
-          sAssign.methodFullName shouldBe Operators.assignment
-          sAssign.code shouldBe "String s = (String) o"
-
-          inside(sAssign.argument.l) { case List(sIdentifier: Identifier, castExpr: Call) =>
-            sIdentifier.name shouldBe "s"
-            sIdentifier.typeFullName shouldBe "java.lang.String"
-            sIdentifier.code shouldBe "s"
-            sIdentifier.refsTo.l should contain theSameElementsAs List(sLocal)
-
-            castExpr.name shouldBe Operators.cast
-            castExpr.methodFullName shouldBe Operators.cast
-            castExpr.typeFullName shouldBe "java.lang.String"
-            castExpr.code shouldBe "(String) o"
-
-            inside(castExpr.argument.l) { case List(stringType: TypeRef, oIdentifier: Identifier) =>
-              stringType.typeFullName shouldBe "java.lang.String"
-              stringType.code shouldBe "String"
-
+        ) { case List(_: JumpTarget, instanceCheck: ControlStructure) =>
+          inside(instanceCheck.astChildren.collectAll[Call].argument.l) {
+            case List(oIdentifier: Identifier, stringType: TypeRef) =>
               oIdentifier.name shouldBe "o"
-              oIdentifier.typeFullName shouldBe "java.lang.Object"
               oIdentifier.code shouldBe "o"
-              oIdentifier.refsTo.l should contain theSameElementsAs cpg.method.name("foo").parameter.name("o").l
+              oIdentifier.typeFullName shouldBe "java.lang.Object"
+
+              stringType.typeFullName shouldBe "java.lang.String"
+          }
+          instanceCheck.code shouldBe "if (o instanceof String)"
+
+          inside(instanceCheck.astChildren.l) { case List(instanceOfCall: Call, statementsBlock: Block) =>
+            instanceOfCall.code shouldBe "o instanceof String"
+            inside(statementsBlock.astChildren.l) { case List(sLocal: Local, sAssign: Call, sinkCall: Call) =>
+              sLocal.name shouldBe "s"
+              sLocal.typeFullName shouldBe "java.lang.String"
+              sLocal.code shouldBe "String s"
+
+              sAssign.name shouldBe Operators.assignment
+              sAssign.methodFullName shouldBe Operators.assignment
+              sAssign.code shouldBe "s = (String) o"
+
+              inside(sAssign.argument.l) { case List(sIdentifier: Identifier, castExpr: Call) =>
+                sIdentifier.name shouldBe "s"
+                sIdentifier.typeFullName shouldBe "java.lang.String"
+                sIdentifier.code shouldBe "s"
+                sIdentifier.refsTo.l should contain theSameElementsAs List(sLocal)
+
+                castExpr.name shouldBe Operators.cast
+                castExpr.methodFullName shouldBe Operators.cast
+                castExpr.typeFullName shouldBe "java.lang.String"
+                castExpr.code shouldBe "(String) o"
+
+                inside(castExpr.argument.l) { case List(stringType: TypeRef, oIdentifier: Identifier) =>
+                  stringType.typeFullName shouldBe "java.lang.String"
+                  stringType.code shouldBe "String"
+
+                  oIdentifier.name shouldBe "o"
+                  oIdentifier.typeFullName shouldBe "java.lang.Object"
+                  oIdentifier.code shouldBe "o"
+                  oIdentifier.refsTo.l should contain theSameElementsAs cpg.method.name("foo").parameter.name("o").l
+                }
+              }
             }
           }
         }

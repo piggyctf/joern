@@ -27,6 +27,7 @@ import io.joern.x2cpg.Ast
 import org.slf4j.LoggerFactory
 import com.github.javaparser.ast.stmt.LocalClassDeclarationStmt
 import com.github.javaparser.symbolsolver.javaparsermodel.contexts.StatementContext
+import io.shiftleft.codepropertygraph.generated.nodes.NewBlock
 
 import java.util
 import java.util.Collections
@@ -148,15 +149,28 @@ trait AstForStatementsCreator extends AstForSimpleStatementsCreator with AstForF
     )
   }
 
-  private[statements] def wrapInBlockWithPrefix(stmt: Statement, prefixAsts: List[Ast]): Ast = {
-    stmt match {
-      case blockStmt: BlockStmt => astForBlockStatement(blockStmt, prefixAsts = prefixAsts)
+  private[statements] def wrapInBlockWithPrefix(prefixAsts: List[Ast], stmt: Statement): Ast = {
+    wrapInBlockWithPrefix(prefixAsts, stmt :: Nil)
+  }
+
+  private[statements] def wrapInBlockWithPrefix(prefixAsts: List[Ast], stmts: List[Statement]): Ast = {
+    stmts match {
+      case Seq()                     => Ast(NewBlock()).withChildren(prefixAsts)
+      case Seq(blockStmt: BlockStmt) => astForBlockStatement(blockStmt, prefixAsts = prefixAsts)
+
+      case Seq(singleStmt) =>
+        val stmtAsts = astsForStatement(singleStmt)
+        stmtAsts.toList match {
+          case bodyStmt :: Nil if prefixAsts.isEmpty => bodyStmt
+          case _                                     => blockAst(blockNode(singleStmt), prefixAsts ++ stmtAsts)
+        }
 
       case _ =>
-        val stmts = astsForStatement(stmt)
-        stmts.toList match {
+        val stmtsAsts = stmts.flatMap(astsForStatement)
+        stmtsAsts match {
+          case Nil                                   => Ast(NewBlock()).withChildren(prefixAsts)
           case bodyStmt :: Nil if prefixAsts.isEmpty => bodyStmt
-          case _                                     => blockAst(blockNode(stmt), prefixAsts ++ stmts)
+          case _                                     => blockAst(blockNode(stmts.head), prefixAsts ++ stmtsAsts)
         }
     }
   }
